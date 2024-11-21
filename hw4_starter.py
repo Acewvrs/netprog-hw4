@@ -20,15 +20,6 @@ def run():
 	my_hostname = socket.gethostname() # Gets my host name
 	my_address = socket.gethostbyname(my_hostname) # Gets my IP address from my hostname
 
-	# Start gRPC server
-	server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-	dht_node = DHTNode(local_id, k)
-	csci4220_hw4_pb2_grpc.add_DHTNodeServicer_to_server(dht_node, server)
-
-	server.add_insecure_port(f'[::]:{my_port}')
-	server.start()
-	print(f"Node {local_id}: gRPC server started on port {my_port}")
-
 	''' Use the following code to convert a hostname to an IP and start a channel
 	Note that every stub needs a channel attached to it
 	When you are done with a channel you should call .close() on the channel.
