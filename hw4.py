@@ -28,6 +28,7 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         self.k_buckets = [[] for i in range(4)] # list of nodes, separated by distance
         self.node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
         self.k = k
+        self.key_vals = dict()
 
     # def add_to_kbucket(self, retrieved_node):
     #     distance = find_distance_between_nodes(self.node, retrieved_node)
@@ -35,12 +36,16 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
     #     self.k_buckets[k_idx].append(retrieved_node)
     
     def remove_from_kbucket(self, node_to_remove):
+        if (not self.node_in_bucket(node_to_remove)):
+            print(f'No record of quitting node {node_to_remove.id} in k-buckets.')
+            return
         distance = find_distance_between_nodes(self.node, node_to_remove)
         k_idx = get_bucket_index(distance)
+        print(f'Evicting quitting node {node_to_remove.id} from bucket {k_idx}')
         self.k_buckets[k_idx].remove(node_to_remove)
 
     def node_in_bucket(self, node):
-        distance = find_distance_between_nodes(self.node, node_to_remove)
+        distance = find_distance_between_nodes(self.node, node)
         k_idx = get_bucket_index(distance)
         if (node in self.k_buckets[k_idx]): return True
         return False
@@ -75,17 +80,72 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
 
     # send findNode request to another node we know
     # returns the k closest nodes returned by that node
-    def send_FindNode_request(self, address, port):
+    def send_FindNode_request(self, target_node, address, port):
+        channel = grpc.insecure_channel(address + ':' + str(port))
+        
+        # local_node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
+        stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
+        request = csci4220_hw4_pb2.IDKey(
+            node=target_node,
+            idkey=self.node_id  # this can be any arbitrary value
+        )
+        response = stub.FindNode(request)
+        return response.nodes
+    
+    # send findValue request to another node we know
+    # returns the k closest nodes returned by that node
+    def send_FindValue_request(self, target_key, address, port):
         channel = grpc.insecure_channel(address + ':' + str(port))
         
         local_node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
         stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
         request = csci4220_hw4_pb2.IDKey(
-            node=local_node,
-            idkey=self.node_id  # ID key to search for
+            node=local_node,    # this can be any arbitrary node
+            idkey=target_key  
         )
-        response = stub.FindNode(request)
+        response = stub.FindValue(request)
         return response.nodes
+    
+    # send findValue request to another node we know
+    # returns the k closest nodes returned by that node
+    def send_StoreKeyVal_request(self, key, val, requester_node, address, port):
+        channel = grpc.insecure_channel(address + ':' + str(port))
+        
+        # local_node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
+        stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
+        request = csci4220_hw4_pb2.KeyValue(
+            node=requester_node,    # original requester's node
+            key = key,
+            value = val 
+        )
+        stub.StoreKeyVal(request)
+
+    # send findValue request to another node we know
+    # returns the k closest nodes returned by that node
+    def send_getVal_request(self, key, address, port):
+        channel = grpc.insecure_channel(address + ':' + str(port))
+        
+        # local_node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
+        stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
+        # request = csci4220_hw4_pb2.KeyValue(
+        #     node=requester_node,    # original requester's node
+        #     key = key,
+        #     value = val 
+        # )
+        return stub.StoreKeyVal(key)
+    
+    # send findValue request to another node we know
+    # returns the k closest nodes returned by that node
+    def send_handleQuit_request(self, address, port):
+        channel = grpc.insecure_channel(address + ':' + str(port))
+        
+        # local_node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
+        stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
+        request = csci4220_hw4_pb2.IDKey(
+            node=self.node,    
+            idkey = 1   # this value can be arbitrary
+        )
+        return stub.handleQuit(request)
 
     def FindNode(self, request, context):
         print(f'Serving FindNode({request.idkey}) request for {request.node.id}')
@@ -93,7 +153,7 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         # print(request)
         self.update_k_buckets(request.node)
 
-        target_id = request.idkey  # The ID we are trying to locate
+        target_id = request.node.id  # The ID we are trying to locate
         known_nodes = [node for nodes in self.k_buckets for node in nodes]
         visited = [request.node]
         node_found = False
@@ -112,7 +172,7 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
             for node in nodes_to_visit:
                 visited.append(node.id)
 
-                response_nodes = self.send_FindNode_request(node.address, node.port)
+                response_nodes = self.send_FindNode_request(request.node, node.address, node.port)
                 
                 self.update_k_buckets(node)
                 
@@ -134,10 +194,12 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
                     node_found = True
                     break
 
-        # self.update_k_buckets(request.node)
-
-        # closest_nodes = [node for node in k_closest_nodes if ]
         # print(k_closest_nodes)
+
+        if (node_found):
+            print(f'Found destination id {target_id}')
+        else:
+            print(f'Could not find destination id {target_id}')
 
         response = csci4220_hw4_pb2.NodeList(
             responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
@@ -184,6 +246,130 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         # )
         # return response
 
+    def FindValue(self, request, context):
+        print(f'Serving FindValue({request.idkey}) request for {request.node.id}')
+
+        # print(request)
+        self.update_k_buckets(request.node)
+
+        target_key = request.idkey  # The ID key we are trying to locate
+
+        known_nodes = [node for nodes in self.k_buckets for node in nodes]
+        visited = [request.node]
+        key_found = False
+        node_with_key = None
+
+        # if this node has the key, return its value
+        if target_key in self.key_vals.keys():
+            print(f'Found data "{self.key_vals[target_key]}" for key {target_key}')
+            response = csci4220_hw4_pb2.NodeList(
+                responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
+                nodes=self.node
+            )
+            return response
+
+        # get k closest IDs to nodeID
+        k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_key(self.node, target_key))[:self.k]
+        while (len(visited) < len(known_nodes) and not key_found):
+            # get nodes we've not visited
+            nodes_to_visit = [node for node in k_closest_nodes if node.id not in visited]
+            for node in nodes_to_visit:
+                visited.append(node.id)
+
+                response_nodes = self.send_FindValue_request(node.address, node.port)
+                
+                self.update_k_buckets(node)
+                
+                # Update k-buckets with all nodes in the response
+                for response_node in response_nodes:
+                    # If a node in R was already in a k-bucket, its position does not change.
+                    self.update_k_buckets_no_removal(response_node)
+
+                # concatenate list
+                known_nodes.extend(response_nodes)                  
+
+            # get k closest IDs to nodeID
+            k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_key(n, target_key))[:self.k]
+        
+            for node in k_closest_nodes:
+                if (target_key in node.key_vals.keys()):
+                    key_found = True
+                    node_with_key = node
+                    break
+
+        # node with key found; return that node
+        if key_found:
+            returned_val = self.send_getVal_request(target_key, node_with_key.address, node_with_key.port)
+            print(f'Found value "{returned_val}" for key {target_key}')
+            response = csci4220_hw4_pb2.NodeList(
+                responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
+                nodes=node_with_key
+            )
+            return response
+
+        # node with key not found; return k closest nodes
+        print(f'Could not find key {target_key}')
+        response = csci4220_hw4_pb2.NodeList(
+            responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
+            nodes=k_closest_nodes
+        )
+        return response
+    
+    # Store the value at the given node. 
+    def Store(self, request, context):
+        # client doesn't use return value; so return any IDKey object
+        response = csci4220_hw4_pb2.IDKey(
+            responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
+            nodes=self.node
+        )
+        
+        # get the entire list of nodes we know, including current node as it may be the closest node
+        known_nodes = [node for nodes in self.k_buckets for node in nodes]
+        known_nodes.append(self.node)
+
+        # find closest node and send key-value pair to that node
+        closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_key(self.node, request.key))
+        closest_node = closest_nodes[0]
+
+        # current node is the closest node
+        if (closest_node == self.node):
+            print(f'Storing key {request.key} value "{request.value}"')
+            self.storeKeyVal(request)
+            return response
+
+        # current node is not the closest node
+        print(f"Storing key {request.key} at node {closest_node.id}")
+        self.send_StoreKeyVal_request(request.key, request.value, request.node, closest_node.address, closest_node.port)
+        return response
+    
+    # Notify a remote node that the node with ID in IDKey is quitting the
+    # network and should be removed from the remote node's k-buckets. 
+    def Quit(self, request, context):
+        # client doesn't use return value; so return any IDKey object
+        response = csci4220_hw4_pb2.IDKey(
+            responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
+            nodes=self.node
+        )
+
+        known_nodes = [node for nodes in self.k_buckets for node in nodes]
+        for node in known_nodes:
+            print(f"Letting {node.id} know I'm quitting.")
+            self.send_handleQuit_request(node.address, node.port)
+
+        print(f'Shut down node {self.node}')
+        return response
+    
+    # given a key value pair, store it in this node
+    def storeKeyVal(self, request):
+        self.update_k_buckets(request.node)
+        self.key_vals[request.key] = request.value
+
+    def getVal(self, request):
+        return self.key_vals[request.key]
+    
+    def handleQuit(self, request):
+        self.remove_from_kbucket(request.node)
+
 # k_buckets: list of Nodes
 def print_kbuckets(k_buckets):
     # <i> [<oldest entry> <next oldest entry> ... <newest entry>]<newline>
@@ -214,6 +400,9 @@ def start_server(local_id, kad_node, my_port):
 def find_distance_between_nodes(node1, node2):
     return abs(node1.id ^ node2.id)
 
+def find_distance_between_node_and_key(node1, key):
+    return abs(node1.id ^ key)
+
 # given distance between two nodes, find the right k-bucket index
 # distance >= 0
 def get_bucket_index(distance):
@@ -232,8 +421,19 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
         command_input = input("")
         command = command_input.strip().split(' ')
         if command[0] == "QUIT":
-            print("Stopping the server...")
-            break
+            channel = grpc.insecure_channel(kad_node.address + ':' + kad_node.port)
+
+            local_node = csci4220_hw4_pb2.Node(id=local_id, port=int(my_port), address=my_address)
+            stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
+            request = csci4220_hw4_pb2.IDKey(
+                node=target_node, # arbitrary
+                idkey=local_id    # arbitrary
+            )
+
+            try:
+                response = stub.Quit(request)
+            finally:
+                channel.close()
         elif command[0] == "BOOTSTRAP": # BOOTSTRAP <remote hostname> <remote port>
             # IMPORTANT: when testing, replace all custom host names (e.g. peer01) with 127.0.1.1
             # for example, BOOTSTRAP 127.0.1.1 9000
@@ -252,7 +452,7 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
             stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
             request = csci4220_hw4_pb2.IDKey(
                 node=local_node,
-                idkey=local_id  # ID key to search for
+                idkey=local_id  # arbitrary
             )
             
             try:
@@ -271,7 +471,68 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
 
             finally:
                 channel.close()
+        elif command[0] == "FIND_NODE":
+            target_node = command[1]
+            channel = grpc.insecure_channel(kad_node.address + ':' + kad_node.port)
+
+            local_node = csci4220_hw4_pb2.Node(id=local_id, port=int(my_port), address=my_address)
+            stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
+            request = csci4220_hw4_pb2.IDKey(
+                node=target_node,
+                idkey=local_id    # arbitrary
+            )
+
+            try:
+                print(f'Before FIND_NODE command, k-buckets are:')
+                print_kbuckets(kad_node.k_buckets)
+
+                response = stub.FindNode(request)
+
+                print(f'After FIND_NODE command, k-buckets are:')
+                print_kbuckets(kad_node.k_buckets)
+
+            finally:
+                channel.close()
+        elif command[0] == "FIND_VALUE":
+            target_key = command[1]
+            channel = grpc.insecure_channel(kad_node.address + ':' + kad_node.port)
+
+            local_node = csci4220_hw4_pb2.Node(id=local_id, port=int(my_port), address=my_address)
+            stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
+            request = csci4220_hw4_pb2.IDKey(
+                node=local_node,  # arbitrary
+                idkey=target_key    
+            )
+
+            try:
+                print(f'Before FIND_NODE command, k-buckets are:')
+                print_kbuckets(kad_node.k_buckets)
+
+                response = stub.FindValue(request)
+
+                print(f'After FIND_NODE command, k-buckets are:')
+                print_kbuckets(kad_node.k_buckets)
+
+            finally:
+                channel.close()
+        elif command[0] == "STORE":
+            key = command[1]
+            value = command[2]
             
+            channel = grpc.insecure_channel(kad_node.address + ':' + kad_node.port)
+
+            local_node = csci4220_hw4_pb2.Node(id=local_id, port=int(my_port), address=my_address)
+            stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
+            request = csci4220_hw4_pb2.KeyValue(
+                node=local_node,  
+                key=key,
+                value=value   
+            )
+
+            try:
+                response = stub.Store(request)
+            finally:
+                channel.close()
         else:
             print(f"Unknown command: {command}")
 
