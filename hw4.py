@@ -183,15 +183,15 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
 
     def FindNode(self, request, context):
         # print(request)
-        if (request.node.id != self.node_id):
-            print(f'Serving FindNode({request.idkey}) request for {request.node.id}')
-            # self.update_k_buckets(request.node)
+        # if (request.node.id != self.node_id):
+        #     print(f'Serving FindNode({request.idkey}) request for {request.node.id}')
+        #     # self.update_k_buckets(request.node)
         
+        # this node is what the requester is lookin for
         if (request.idkey == self.node_id): # or request.idkey == request.node.id
             if (request.node.id != self.node_id):
                 self.update_k_buckets(request.node)
 
-            # this node is what the requester is lookin for
             node_to_return = csci4220_hw4_pb2.Node(id=self.node_id,port=self.port,address=self.address)
             response = csci4220_hw4_pb2.NodeList(
                 responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
@@ -199,6 +199,9 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
             )
             return response
         
+        if (request.node.id != self.node_id):
+            print(f'Serving FindNode({request.idkey}) request for {request.node.id}')
+
         # request is looking for itself (for BOOTSTRAP)
         if (request.idkey == request.node.id):
             if (request.node.id != self.node_id):
@@ -224,6 +227,7 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
 
         target_id = request.idkey  # The ID we are trying to locate
         known_nodes = [node for nodes in self.k_buckets for node in nodes]
+        # visited = [request.node]
         visited = [request.node]
         node_found = False
         # sorted(known_nodes, key=lambda n: find_distance_between_nodes(target_id, n))[:self.k]
@@ -255,11 +259,12 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
 
                 # remove duplicates
                 known_nodes = self.remove_duplicate_nodes(known_nodes)  
-
-                for node in k_closest_nodes:
+                for node in known_nodes:
                     if (node.id == target_id):
                         node_found = True
-                        break                
+                        break 
+                if node_found:
+                    break               
 
             # get k closest IDs to nodeID
             k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_idkey(n, target_id))[:self.k]
@@ -517,7 +522,8 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
             # IMPORTANT: when testing, replace all custom host names (e.g. peer01) with 127.0.1.1
             # for example, BOOTSTRAP 127.0.1.1 9000
             
-            remote_hostname_input = command[1]
+            # remote_hostname_input = command[1]
+            remote_hostname_input = "127.0.0.1"
             remote_port_input = command[2]
             # print(remote_hostname_input, remote_port_input)
             remote_addr = socket.gethostbyname(remote_hostname_input)
@@ -574,7 +580,7 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
 
                 response = stub.FindNode(request)
 
-                if (len(request.nodes) and request.nodes[0].id == target_node_id):
+                if (len(response.nodes) > 0 and response.nodes[0].id == target_node_id):
                     print(f'Found destination id {target_node_id}')
                 else:
                     # save k-closest node
