@@ -21,7 +21,7 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         :param k_bucket: List of known nodes (K-Bucket)
         """
         self.node_id = int(node_id)
-        self.address = local_address
+        self.address = str(local_address)
         self.port = int(local_port)
         self.recently_used_nodes = list() # list of nodes
         self.node_classes = dict() # maps node id to it kade node implementation (KadImpl)
@@ -76,35 +76,50 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         k_idx = get_bucket_index(distance)
         bucket = self.k_buckets[k_idx] # pass by reference; you can directly change k_buckets by modifying bucket
 
-        if len(bucket) >= self.k:
+        # If a node was already in a k-bucket, its position does not change.
+        if (node in bucket):
+            return
+        elif len(bucket) >= self.k:
             # Bucket is full, remove the least recently used (first) and add new node
             bucket.pop(0)
+        # If it was not in the bucket yet, then it is added as the most recently used in that bucket.
         bucket.append(node)
 
     # send findNode request to another node we know
     # returns the k closest nodes returned by that node
-    def send_FindNode_request(self, target_node, address, port):
+    def send_FindNode_request(self, requester, target_id, address, port):
         channel = grpc.insecure_channel(address + ':' + str(port))
         
         # local_node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
         stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
         request = csci4220_hw4_pb2.IDKey(
-            node=target_node,
-            idkey=self.node_id  # this can be any arbitrary value
+            node=requester,
+            idkey=target_id
         )
         response = stub.FindNode(request)
         channel.close()
+
+        # # parse the returned response 
+        # node_list = list()
+        # # Update k-buckets with all nodes in the response
+        # for response_node in response.nodes:
+        #     # If a node in R was already in a k-bucket, its position does not change.
+        #     if (response_node.id != self.node_id):
+        #         node = csci4220_hw4_pb2.Node(id=response_node.id, port=response_node.port, address=response_node.address)
+        #         node_list.append(node)
+
+        # # print(node_list)
         return response.nodes
     
     # send findValue request to another node we know
     # returns the k closest nodes returned by that node
-    def send_FindValue_request(self, target_key, address, port):
+    def send_FindValue_request(self, requester, target_key, address, port):
         channel = grpc.insecure_channel(address + ':' + str(port))
         
-        local_node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
+        # local_node = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
         stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
         request = csci4220_hw4_pb2.IDKey(
-            node=local_node,
+            node=requester,
             idkey=target_key  
         )
         response = stub.FindValue(request)
@@ -167,13 +182,45 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
     #     self.remove_from_kbucket(request.node)
 
     def FindNode(self, request, context):
-        print(f'Serving FindNode({request.idkey}) request for {request.node.id}')
-
         # print(request)
         if (request.node.id != self.node_id):
+            print(f'Serving FindNode({request.idkey}) request for {request.node.id}')
             self.update_k_buckets(request.node)
+        
+        if (request.idkey == self.node_id): # or request.idkey == request.node.id
+            # self.update_k_buckets(request.node)
 
-        target_id = request.node.id  # The ID we are trying to locate
+            # this node is what the requester is lookin for
+            node_to_return = csci4220_hw4_pb2.Node(id=self.node_id,port=self.port,address=self.address)
+            response = csci4220_hw4_pb2.NodeList(
+                responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
+                nodes=[node_to_return]
+            )
+            return response
+        
+        # request is looking for itself (for BOOTSTRAP)
+        if (request.idkey == request.node.id):
+            # self.update_k_buckets(request.node)
+
+            known_nodes = [node for nodes in self.k_buckets for node in nodes]
+            known_nodes.append(self.node)
+            # known_nodes.insert(0, self.node)
+
+            closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_idkey(n, request.idkey))
+            
+            nodes_to_return = list()
+            for node in closest_nodes:
+                node_to_return = csci4220_hw4_pb2.Node(id=node.id,port=node.port,address=node.address)
+                nodes_to_return.append(node_to_return)
+            
+            response = csci4220_hw4_pb2.NodeList(
+                responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
+                nodes=nodes_to_return
+            )
+            return response
+
+
+        target_id = request.idkey  # The ID we are trying to locate
         known_nodes = [node for nodes in self.k_buckets for node in nodes]
         visited = [request.node]
         node_found = False
@@ -182,8 +229,8 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         # closest_nodes = [node for nodes in self.k_buckets for node in nodes if node not in visited]
 
         # get k closest IDs to nodeID
-        k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_nodes(self.node, n))[:self.k]
-        while (any(node not in visited for node in known_nodes) and not node_found):
+        k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_idkey(n, target_id))[:self.k]
+        while (any(node not in visited for node in k_closest_nodes) and not node_found):
             # get nodes we've not visited
             nodes_to_visit = [node for node in k_closest_nodes if node not in visited]
             # Sort the k-bucket by distance, which is determined by XOR
@@ -192,10 +239,10 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
             for node in nodes_to_visit:
                 visited.append(node)
 
-                response_nodes = self.send_FindNode_request(request.node, node.address, node.port)
-                
+                response_nodes = self.send_FindNode_request(request.node, request.idkey, node.address, node.port)
+
                 self.update_k_buckets(node)
-                
+
                 # Update k-buckets with all nodes in the response
                 for response_node in response_nodes:
                     # If a node in R was already in a k-bucket, its position does not change.
@@ -205,17 +252,17 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
                 known_nodes.extend(response_nodes)  
 
                 # remove duplicates
-                known_nodes = self.remove_duplicate_nodes(known_nodes)                  
+                known_nodes = self.remove_duplicate_nodes(known_nodes)  
+
+                for node in k_closest_nodes:
+                    if (node.id == target_id):
+                        node_found = True
+                        break                
 
             # get k closest IDs to nodeID
-            k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_nodes(target_id, n))[:self.k]
+            k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_idkey(n, target_id))[:self.k]
         
-            # if (k_closest_nodes[0].id == target_id):
-            #     break
-            for node in k_closest_nodes:
-                if (node.id == target_id):
-                    node_found = True
-                    break
+        # self.update_k_buckets(request.node)
 
         nodes_to_return = list()
         for node in k_closest_nodes:
@@ -231,17 +278,20 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
     def FindValue(self, request, context):
         # print(request)
         if (request.node.id != self.node_id):
-            print(f'Serving FindValue({request.idkey}) request for {request.node.id}')
+            print(f'Serving FindKey({request.idkey}) request for {request.node.id}')
             self.update_k_buckets(request.node)
 
-        target_key = request.idkey  # The ID key we are trying to locate
+        target_key = request.idkey  # The key we are trying to locate
 
         known_nodes = [node for nodes in self.k_buckets for node in nodes]
         visited = [request.node]
         key_found = False
 
         # if this node has the key, return its value
+        # b = target_key in self.key_vals.keys()
+        # print(target_key, self.key_vals.keys(), b)
         if target_key in self.key_vals.keys():
+            # self.update_k_buckets(request.node)
             if (request.node.id == self.node_id):
                 print(f'Found data "{self.key_vals[target_key]}" for key {target_key}')
             node_to_return = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
@@ -258,18 +308,14 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         response_nodes = None
 
         # get k closest IDs to nodeID
-        k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_key(self.node, target_key))[:self.k]
-        while (any(node not in visited for node in known_nodes) and not key_found):
+        k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_idkey(n, target_key))[:self.k]
+        while (any(node not in visited for node in k_closest_nodes) and not key_found):
             # get nodes we've not visited
             nodes_to_visit = [node for node in k_closest_nodes if node not in visited]
             for node in nodes_to_visit:
                 visited.append(node)
 
-                key_found, key_value, response_nodes = self.send_FindValue_request(target_key, node.address, node.port)
-                if (key_found):
-                    # node_with_key = node
-                    break
-
+                key_found, key_value, response_nodes = self.send_FindValue_request(request.node, target_key, node.address, node.port)
                 # if (node.id != self.node_id):
                 self.update_k_buckets(node)
 
@@ -277,29 +323,43 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
                 for response_node in response_nodes:
                     # If a node in R was already in a k-bucket, its position does not change.
                     if (response_node.id != self.node_id):
+                    #     node = csci4220_hw4_pb2.Node(id=response_node.id, port=response_node.port, address=response_node.address)
                         self.update_k_buckets_no_removal(response_node)
 
                 # concatenate list
                 known_nodes.extend(response_nodes) 
 
                 # remove duplicates
-                known_nodes = self.remove_duplicate_nodes(known_nodes)           
+                known_nodes = self.remove_duplicate_nodes(known_nodes)   
+
+                if (key_found):
+                    break        
 
             # get k closest IDs to nodeID
-            k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_key(n, target_key))[:self.k]
+            k_closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_idkey(n, target_key))[:self.k]
+
+            # print('loop ends')
+            # if (key_found):
+                # node_with_key = node
+                # print(f'Found value "{key_value.value}" for key {target_key}')
+                # break
 
         # node with key found; return that node
         if key_found:
             # returned_val = self.send_getVal_request(target_key, node_with_key.address, node_with_key.port)
-            print(f'Found value "{key_value.value}" for key {target_key}')
+            if (node.id == self.node_id):
+                print(f'Found value "{key_value.value}" for key {target_key}')
 
-            # node_to_return = csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address)
-            # kv = csci4220_hw4_pb2.KeyValue(node=node_to_return, key=target_key, value=returned_val)
+            nodes_to_return = list()
+            for node in k_closest_nodes:
+                node_to_return = csci4220_hw4_pb2.Node(id=node.id,port=node.port,address=node.address)
+                nodes_to_return.append(node_to_return)
+
             response = csci4220_hw4_pb2.KV_Node_Wrapper(
                 responding_node=csci4220_hw4_pb2.Node(id=self.node_id, port=self.port, address=self.address),
                 mode_kv = True,
                 kv=key_value,
-                nodes=[] # arbitrary
+                nodes=nodes_to_return
             )
             return response
 
@@ -307,6 +367,7 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         if (request.node.id == self.node_id):
             print(f'Could not find key {target_key}')
 
+        # self.update_k_buckets(request.node)
         nodes_to_return = list()
         for node in k_closest_nodes:
             node_to_return = csci4220_hw4_pb2.Node(id=node.id,port=node.port,address=node.address)
@@ -347,7 +408,7 @@ class KadImpl(csci4220_hw4_pb2_grpc.KadImplServicer):
         known_nodes.append(self.node)
 
         # find closest node and send key-value pair to that node
-        closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_key(n, request.key))
+        closest_nodes = sorted(known_nodes, key=lambda n: find_distance_between_node_and_idkey(n, request.key))
         closest_node = closest_nodes[0]
 
         # current node is the closest node
@@ -415,7 +476,7 @@ def start_server(local_id, kad_node, my_port):
 def find_distance_between_nodes(node1, node2):
     return abs(node1.id ^ node2.id)
 
-def find_distance_between_node_and_key(node1, key):
+def find_distance_between_node_and_idkey(node1, key):
     return abs(node1.id ^ key)
 
 # given distance between two nodes, find the right k-bucket index
@@ -468,21 +529,28 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
             stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
             request = csci4220_hw4_pb2.IDKey(
                 node=local_node,
-                idkey=local_id  # arbitrary
+                idkey=local_id
             )
             
             try:
                 # print("sending: ", request)
                 response = stub.FindNode(request)
+
+                known_nodes = response.nodes
+                for n in known_nodes:
+                    if (n.id != local_id):
+                        # node = csci4220_hw4_pb2.Node(id=n.id, port=n.port, address=n.address)
+                        kad_node.update_k_buckets(n)
+
                 # print("got a response", response)
                 # response = stub.JoinNetwork(csci4220_hw4_pb2.NodeIDRequest(node_id=local_id))
                 
-                kad_node.update_k_buckets(response.responding_node)
+                # kad_node.update_k_buckets(response.responding_node)
 
                 # response_node = KadImpl(response.responding_node.id, response.responding_node.address, response.responding_node.port, k)
                 # kad_node.saveImpl(response.responding_node.id, response_node)
 
-                print(f'After BOOTSTRAP({local_id}), k-buckets are:')
+                print(f'After BOOTSTRAP({response.responding_node.id}), k-buckets are:')
                 print_kbuckets(kad_node.k_buckets)
 
             finally:
@@ -491,11 +559,11 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
             target_node_id = int(command[1])
             channel = grpc.insecure_channel(kad_node.address + ':' + str(kad_node.port))
 
-            target_node = csci4220_hw4_pb2.Node(id=target_node_id, port=int(my_port), address=my_address)
+            # target_node = csci4220_hw4_pb2.Node(id=local_id, port=int(my_port), address=my_address)
             stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
             request = csci4220_hw4_pb2.IDKey(
-                node=target_node,
-                idkey=local_id    # arbitrary
+                node=kad_node.node,
+                idkey=target_node_id    
             )
 
             try:
@@ -507,6 +575,12 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
                 if (len(request.nodes) and request.nodes[0].id == target_node_id):
                     print(f'Found destination id {target_node_id}')
                 else:
+                    # save k-closest node
+                    known_nodes = response.nodes
+                    for n in known_nodes:
+                        if (n.id != local_id):
+                            # node = csci4220_hw4_pb2.Node(id=n.id, port=n.port, address=n.address)
+                            kad_node.update_k_buckets(n)
                     print(f'Could not find destination id {target_node_id}')
 
                 print(f'After FIND_NODE command, k-buckets are:')
@@ -521,7 +595,7 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
             local_node = csci4220_hw4_pb2.Node(id=local_id, port=int(my_port), address=my_address)
             stub = csci4220_hw4_pb2_grpc.KadImplStub(channel)
             request = csci4220_hw4_pb2.IDKey(
-                node=local_node,  # arbitrary
+                node=local_node,
                 idkey=target_key    
             )
 
@@ -530,6 +604,14 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
                 print_kbuckets(kad_node.k_buckets)
 
                 response = stub.FindValue(request)
+                
+                # if (response.mode_kv == False):
+                # save k-closest node
+                known_nodes = response.nodes
+                for n in known_nodes:
+                    if (n.id != local_id):
+                        # node = csci4220_hw4_pb2.Node(id=n.id, port=n.port, address=n.address)
+                        kad_node.update_k_buckets(n)
 
                 print(f'After FIND_VALUE command, k-buckets are:')
                 print_kbuckets(kad_node.k_buckets)
