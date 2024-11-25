@@ -1,0 +1,3 @@
+the following line may have to come outside the for loop after k_closest_node 
+if (key_found):
+    break  
