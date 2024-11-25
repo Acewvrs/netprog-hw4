@@ -597,8 +597,8 @@ def handle_commands(kad_node, local_id, my_address, my_port, k):
             # IMPORTANT: when testing, replace all custom host names (e.g. peer01) with 127.0.1.1
             # for example, BOOTSTRAP 127.0.1.1 9000
             
-            # remote_hostname_input = command[1]
-            remote_hostname_input = "127.0.0.1"
+            remote_hostname_input = command[1]
+            # remote_hostname_input = "127.0.0.1"
             remote_port_input = command[2]
             # print(remote_hostname_input, remote_port_input)
             remote_addr = socket.gethostbyname(remote_hostname_input)
